@@ -1,0 +1,156 @@
+---
+title: "Applying Machine Learning on Quantified Self Data"
+subtitle: "Project for Coursera: Practical Machine Learning"
+author: "Clement Liu"
+date: "June 3, 2016"
+output: html_document
+---
+
+# Background
+
+Using devices such as *Jawbone Up*, *Nike FuelBand*, and *Fitbit* it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how *much* of a particular activity they do, but they rarely quantify *how well the do it*. In this project, the goal is to use data from accelerometers on the belt, forearm, arm, and dumbbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: [http://groupware.les.inf.puc-rio.br/har](http://groupware.les.inf.puc-rio.br/har).
+
+# Abstract
+
+The purpose of this project is to use prediction algorithms to accurately predict the "class" of a unilateral dumbbell biceps curl based on the data captured by the accelerometers worn by the experiment participants. For each of the 6 participants, each curl was classified as "Class A" for being performed exactly according to specifications, otherwise it was classified as "Class B", "Class C", "Class D", or "Class E" for incurring one of the four common mistakes.
+
+# Necessary Libraries
+
+```{r message = FALSE, warning = FALSE, tidy = TRUE}
+options(width = 100)
+library(scales) # To convert the scale to percentages
+library(caret) # For prediction functions 
+library(ggplot2) # For display plots
+library(rpart) # For the decision trees
+library(dplyr) # Data manipulation
+library(rattle) # To display the decision trees
+library(randomForest) # Random Forest
+library(e1071) # Support vector machine
+```
+
+# Exploratory Analysis
+
+Taking a look at the distribution of the classes below, we see that ~28% of the biceps curls were done correctly and ~72% of the biceps curls were done incorrectly. The below distribution gives us a baseline of what to expect for our predictions.
+
+```{r tidy = TRUE, warning = FALSE, message = FALSE}
+training <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+testing <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+
+ggplot(training, aes(x = classe)) +
+  geom_bar(aes(fill = classe), width = 0.7) +
+  geom_text(aes(label = ..count..), stat = "count", vjust = -0.7, size = 4) +
+  geom_text(aes(label = scales::percent((..count..)/sum(..count..))), stat = "count", vjust = 1.3, size = 4) +
+  guides(fill = FALSE) +
+  scale_y_continuous(breaks = 0:5*1000) +
+  ggtitle("Distribution of Classes") +
+  xlab("Class") + ylab("Count") +
+  theme_classic()
+```
+
+# Data Cleaning
+
+I removed all of the columns that were identifiers, were empty, or contained all NAs because these columns would skew the results in the prediction algorithms during the model building process. The columns to remove were identified by using View on the data. The data was cleaned the same way for both the training as well as the testing data sets in order to maintain consistency.
+
+```{r tidy = TRUE, warning = FALSE, message = FALSE}
+training_clean <- training[,-c(1:6, 12:36, 50:59, 69:83, 87:101, 103:112, 125:139, 141:150)]
+testing_clean <- testing[,-c(1:6, 12:36, 50:59, 69:83, 87:101, 103:112, 125:139, 141:150)]
+```
+
+# Cross-Validation
+
+The dataset provided by Groupware@LES contained 19,622 observations for training and 20 observations for testing. Only the training observations will be used in the model building process. These 19,622 observations will be split into 75% for training and 25% for validating. This is done because the model accuracy tend to be overly optimistic when calculated against the data it was built on. By first testing the model against the validation dataset (which was not used to build the model), we can get a sense of the out-of-sample error as well as how the model will perform on independent data sets (in this case, for the 20 testing observations).
+
+```{r tidy = TRUE, warning = FALSE, message = FALSE}
+set.seed(1000)
+training_index <- createDataPartition(training_clean$classe, p = 3/4)[[1]]
+
+train <- training_clean[training_index,]
+validate <- training_clean[-training_index,]
+test <- testing_clean
+```
+
+# Model Selection
+
+For the sake of consistency, the predictors and the results were renamed. Then I will build three models -- an SVM, a decision tree, and a random forest -- in order to select the algorithm to use.
+
+```{r tidy = TRUE, warning = FALSE, message = FALSE}
+train_predictors <- as.data.frame(train[,-54])
+train_classe <- train$classe
+
+validate_predictors <- as.data.frame(validate[,-54])
+validate_classe <- validate$classe
+
+test_predictors <- as.data.frame(test[,-54])
+```
+
+## Support Vector Machine (SVM)
+
+```{r tidy = TRUE, warning = FALSE, message = FALSE}
+model_svm <- svm(classe ~ ., data = train, cost = 100, gamma = 1)
+```
+
+First, I try to predict using the Support Vector Machine (SVM). As we can see from the misclassification table below, using this model to predict the training set generates an accuracy of `r round(sum(predict(model_svm, train) == train_classe)/length(train_classe),5)`. This would seem like a classic case of overfitting.
+
+```{r tidy = TRUE, warning = FALSE, message = FALSE}
+table(predict(model_svm, train), train_classe)
+```
+
+Taking a look at the accuracy against the validation set, we see a result of `r round(sum(predict(model_svm, validate) == validate_classe)/length(validate_classe),5)`, which is still quite remarkable. The misclassification table suggests that most of the errors occur with the observations categorized as "Class E".
+
+```{r tidy = TRUE, warning = FALSE, message = FALSE}
+table(predict(model_svm, validate), validate_classe)
+```
+
+With an accuracy rate of `r round(sum(predict(model_svm, validate) == validate_classe)/length(validate_classe),5)` on the validation set, the SVM is a model worth considering.
+
+## Decision Tree
+
+```{r tidy = TRUE, warning = FALSE, message = FALSE}
+model_tree <- train(train_predictors, train_classe, method = "rpart")
+```
+
+Next, I tried to predict using decision trees. Taking a look at the misclassification table against the training data, it becomes apparent that the approach is flawed. The accuracy rate of `r round(sum(predict(model_tree, train) == train_classe)/length(train_classe),5)` is significantly below that of the SVM. In fact, the algorithm does not capture any observations into "Class D".
+
+```{r tidy = TRUE, warning = FALSE, message = FALSE}
+table(predict(model_tree, train), train_classe)
+```
+
+That result is consistent against the validation set. It has an accuracy of `r round(sum(predict(model_tree, validate) == validate$classe)/length(validate$classe),5)`, and there are no observations in "Class D".
+
+```{r tidy = TRUE, warning = FALSE, message = FALSE}
+table(predict(model_tree, validate), validate_classe)
+```
+
+Here is a look at the dendrogram, but we will not further consider the decision tree as a viable model for this prediction.
+
+```{r tidy = TRUE, warning = FALSE, message = FALSE}
+fancyRpartPlot(model_tree$finalModel)
+```
+
+## Random Forest
+
+```{r tidy = TRUE, warning = FALSE, message = FALSE}
+model_rf <- randomForest(train_predictors, train_classe)
+```
+
+The last algorithm I will try is the random forest. Against the training data, the model has an accuracy rate of `r round(sum(predict(model_rf, train) == train_classe)/length(train_classe),5)`. 
+
+```{r tidy = TRUE, warning = FALSE, message = FALSE}
+table(predict(model_rf, train), train_classe)
+```
+
+This would look like a case of overfitting, but the model works just as well against the validation data. It also has an accuracy rate of `r round(sum(predict(model_rf, validate) == validate_classe)/length(validate_classe),5)`.
+
+```{r tidy = TRUE, warning = FALSE, message = FALSE}
+table(predict(model_rf, validate), validate_classe)
+```
+
+# Conclusion
+
+With a validation accuracy of `r round(sum(predict(model_rf, validate) == validate_classe)/length(validate_classe),5)`, I choose the Random Forest model to predict the test set data.
+
+These are the predictions for the testing data set.
+
+```{r tidy = TRUE, warning = FALSE, message = FALSE}
+predict(model_rf, test_predictors, type = "class")
+```
