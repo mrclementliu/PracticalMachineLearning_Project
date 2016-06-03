@@ -3,7 +3,9 @@ title: "Applying Machine Learning on Quantified Self Data"
 subtitle: "Project for Coursera: Practical Machine Learning"
 author: "Clement Liu"
 date: "June 3, 2016"
-output: html_document
+output: 
+  html_document: 
+    keep_md: yes
 ---
 
 # Background
